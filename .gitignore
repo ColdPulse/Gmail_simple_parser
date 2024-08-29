@@ -5,6 +5,7 @@ __pycache__/
 
 # Another
 .creds/
+result/
 
 # C extensions
 *.so
