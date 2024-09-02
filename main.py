@@ -1,52 +1,59 @@
-import os
-import base64
-import filter
+import creds
 import xmlxexp
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+from tqdm import tqdm
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
-
-def authenticate():
-    creds = None
-    if os.path.exists('./.creds/token.json'):
-        creds = Credentials.from_authorized_user_file('./.creds/token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('./.creds/credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('./.creds/token.json', 'w') as token:
-            token.write(creds.to_json())
-    return creds
-
-def get_messages(service):
-    messages = []
-    page_token = None
-
-    while True:
-        response = service.users().messages().list(userId='me', pageToken=page_token, maxResults=100).execute()
-        if 'messages' in response:
-            messages.extend(response['messages'])
-        page_token = response.get('nextPageToken')
-        
-        # Если нет следующей страницы, выходим из цикла
-        if not page_token:
-            break
-
-    return messages
+def get_message_details(service, user_id, msg_id):
+    msg = service.users().messages().get(userId=user_id, id=msg_id, format='full').execute()
+    
+    headers = msg['payload']['headers']
+    
+    details = {}
+    
+    for header in headers:
+        if header['name'] == 'From':
+            details['From'] = header['value']
+        elif header['name'] == 'To':
+            details['To'] = header['value']
+        elif header['name'] == 'Subject':
+            details['Subject'] = header['value']
+        elif header['name'] == 'Date':
+            details['Date'] = header['value']
+    
+    details['Snippet'] = msg.get('snippet', '')
+    
+    return details
 
 def main():
-    creds = authenticate()
+    creds = creds.load_credentials()
     service = build('gmail', 'v1', credentials=creds)
-    messages = get_messages(service)
 
-    result = filter.process_messages(messages, service)
-    xmlxexp.save_to_excel(result)
+    results = []
+    next_page_token = None
 
-if __name__ == "__main__":
+    pbar = tqdm(unit='request')
+
+    while True:
+        request = service.users().messages().list(userId='me', maxResults=500, pageToken=next_page_token)
+        response = request.execute()
+
+        if 'messages' in response:
+            for message in response['messages']:
+                msg_details = get_message_details(service, 'me', message['id'])
+                results.append(msg_details)  # Сохраняем детали письма
+                pbar.update(1)
+
+        next_page_token = response.get('nextPageToken')
+        
+        if not next_page_token:
+            break
+
+    pbar.close()
+    
+    xmlxexp.save_to_excel(results)
+    print("Загрузка завершена.")
+
+
+if __name__ == '__main__':
     main()
